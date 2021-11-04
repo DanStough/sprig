@@ -1,6 +1,7 @@
 package sprig
 
 import (
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/pem"
@@ -397,6 +398,7 @@ func testGenSignedCert(t *testing.T, caKeyAlgo, certKeyAlgo *string) {
 	if err != nil {
 		t.Error(err)
 	}
+	fmt.Println(out)
 
 	assert.Contains(t, out, beginCertificate)
 	assert.Contains(t, out, endCertificate)
@@ -420,5 +422,59 @@ func TestEncryptDecryptAES(t *testing.T) {
 	tpl := `{{"plaintext" | encryptAES "secretkey" | decryptAES "secretkey"}}`
 	if err := runt(tpl, "plaintext"); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestDerivedSignedCertFromGenCA(t *testing.T) {
+
+	const (
+		cn   = "foo.com"
+		ip1  = "10.0.0.1"
+		ip2  = "10.0.0.2"
+		dns1 = "bar.com"
+		dns2 = "bat.com"
+		loop = 1
+	)
+
+	for idx := 0; idx < loop; idx++ {
+		caCert, err := generateCertificateAuthority(cn, 365)
+		if err != nil {
+			t.Error(err)
+		}
+
+		cert, err := generateSignedCertificate(cn, []interface{}{ip1, ip2}, []interface{}{dns1, dns2}, 365, caCert)
+		if err != nil {
+			t.Error(err)
+		}
+
+		roots := x509.NewCertPool()
+		ok := roots.AppendCertsFromPEM([]byte(caCert.Cert))
+		if !ok {
+			t.Error("failed to parse root certificate")
+		}
+
+		block, _ := pem.Decode([]byte(cert.Cert))
+		if block == nil {
+			t.Error("failed to parse certificate PEM")
+		}
+
+		x509Cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Error("failed parse cert chain")
+		}
+
+		opts := x509.VerifyOptions{
+			Roots:   roots,
+			DNSName: dns1,
+		}
+
+		if _, err := x509Cert.Verify(opts); err != nil {
+			t.Error("failed to verify certificate chain of authority")
+		}
+
+		_, err = tls.X509KeyPair([]byte(cert.Cert), []byte(cert.Key))
+		if err != nil {
+			t.Error("cert and key don't match")
+		}
 	}
 }
